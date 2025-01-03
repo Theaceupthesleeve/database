@@ -1,126 +1,100 @@
-import Todos from "../models/todos.models.js"
-import mongoose from "mongoose"
+import User from "../models/users.models.js";
+import jwt from "jsonwebtoken";
+import bcrypt from "bcrypt";
 
-const addTodo = async (req , res) => {
-   
-    const addTodo = async ( req, res) => req.body
+const generateAccessToken = (user) => {
+  return jwt.sign({ email: user.email }, process.env.ACCESS_JWT_SECRET, {
+    expiresIn: "6h",
+  });
+};
+const generateRefreshToken = (user) => {
+  return jwt.sign({ email: user.email }, process.env.REFRESH_JWT_SECRET, {
+    expiresIn: "7d",
+  });
+};
 
-    if (!title || !description) return res.status(400).json({
-        message: 'title or description is required'
-    })
-    try { 
-        const todo = await Todos.create({
-            title, description
-        })
-        res.status(201).json({
-            message:'todo added sucessfully',
-            data: todo
-        })    
-    } catch (error) {
-        res.status(500).json({
-            message:'internal server error'
-        })
-    }
-}
+// register user
 
+const registerUser = async (req, res) => {
+  const { email, password } = req.body;
 
-const getAllTodo = async (req , res) => {
-    
-    try {
-        const todos = await Todos.find({});
-        res.json({
-            data: todos
-        })
-    } catch (error) {
-        res.status(500).json({
-            message: 'internal server error'
-        })
-    }
-}
+  if (!email) return res.status(400).json({ message: "email required" });
+  if (!password) return res.status(400).json({ message: "password required" });
 
-const getSingleTodo = async (req , res) => {
+  const user = await User.findOne({ email: email });
+  if (user) return res.status(401).json({ message: "user already exist" });
 
-    const { id } = req.params;
+  const createUser = await User.create({
+    email,
+    password,
+  });
+  res.json({ message: "user registered successfully", data: createUser });
+};
 
-    if (!mongoose.Types.ObjectId.isValid(id)) return res.status(400).json({error: "not valid id"})
+// login user
 
-    try {
-        const tood = await Todos.findById({_id: id})
-        
-        if (!todo) return res.status(404).json({
-            message: 'not todo found '
-        })
-        res.json({
-            data:todo
-        })
-    } catch (error) {
-        res.status(500).json({
-            message: 'internal server error'
-        })
-        
-    }    
+const loginUser = async (req, res) => {
+  const { email, password } = req.body;
 
-}
-const deleteTodo = async (req , res) => {
-   const { id } = req.params;
+  if (!email) return res.status(400).json({ message: "email required" });
+  if (!password) return res.status(400).json({ message: "password required" });
+  // email mujood ha bhi ya nahi ha
+  const user = await User.findOne({ email });
+  if (!user) return res.status(404).json({ message: "no user found" });
+  // password compare krwayenga bcrypt
+  const isPasswordValid = await bcrypt.compare(password, user.password);
+  if (!isPasswordValid)
+    return res.status(400).json({ message: "incorrect password" });
 
-   if(!mongoose.Types.ObjectId.isValid(id)) return res.status(400).json({error: "Not valid Id"})
+  // token generate
+  const accessToken = generateAccessToken(user);
+  const refreshToken = generateRefreshToken(user);
 
-    try {
-        const todo = await Todos.findByIdAndDelete({ _id: id })
+  // cookies
+  res.cookie("refreshToken", refreshToken, { http: true, secure: false });
 
-        if (!todo) return res.status(404).json({
-            message: 'no todo found!'
-        })
+  res.json({
+    message: "user loggedIn successfully",
+    accessToken,
+    refreshToken,
+    data: user,
+  });
+};
 
-        res.json({
-            message: 'todo deleted',
-            deleteTodo: todo
-        })
-    } catch (error) {
-        
-        res.status(500).json({
-            message:'internal server error'
-        })
-    }
-}
+// logout user
+const logoutUser = async (req, res) => {
+  res.clearCookie("refreshToken");
+  res.json({ message: "user logout successfully" });
+};
 
+// refreshtoken
+const refreshToken = async (req, res) => {
+  const refreshToken = req.cookies.refreshToken || req.body.refreshToken;
+  if (!refreshToken)
+    return res.status(401).json({ message: "no refresh token found!" });
 
-const editTodo = async (req , res) => {
-    const {id} = req.params;
+  const decodedToken = jwt.verify(refreshToken, process.env.REFRESH_JWT_SECRET);
 
-    if(!mongoose.Types.ObjectId.isValid(id)){
-        return res.json({error:'not a valid id'});
-    }
+  const user = await User.findOne({ email: decodedToken.email });
 
-    try {
-        const todo = await Todos.findOneAndUpdate(
-            {_id: id},
-            {
-                ...req.body
-            },
-            {new: true}
-        );
+  if (!user) return res.status(404).json({ message: "invalid token" });
 
-        if (!todo){
-            return res.status(404).json({error: 'todo not found!'});        
-        }
+  const generateToken = generateAccessToken(user);
+  res.json({ message: "access token generated", accesstoken: generateToken });
 
-        res.json(todo);
-    } catch (error) {
-        res.status(500).json({message: 'internal server error'})
-    }
-}
-
-export {addTodo , getAllTodo , getSingleTodo , deleteTodo , editTodo}
+  res.json({ decodedToken });
+};
 
 
+const authenticateUser = async (req, res, next) => {
+  const token = req.headers["authorization"];
+  if (!token) return res.status(404).json({ message: "no token found" });
 
+  jwt.verify(token, process.env.ACCESS_JWT_SECRET, (err, user) => {
+    if (err) return res.status(403).json({ message: "invalid token" });
+    req.user = user;
+    next();
+  });
+};
 
-
-
-
-
-
-
-
+export { registerUser, loginUser, logoutUser, refreshToken, authenticateUser };
